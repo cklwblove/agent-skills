@@ -1,0 +1,188 @@
+============================================================
+  Multi-Agent AIOps — Java/Go 功能对齐 Python 更新摘要
+  版本：v1.0.1
+  更新日期：2026-05-18
+============================================================
+
+背景
+----
+Python 作为参考实现，功能最完整。Java 和 Go 存在多个关键特性缺失。
+本次按 P0 → P1 → P2 优先级逐步补齐，使三语言实现功能对齐。
+
+
+============================================================
+P0 — 核心能力差距
+============================================================
+
+1. EWMA 检测器 + 多算法投票
+   -----------------------------------------------
+   Java — MonitorAgent.java
+     - 新增 computeEWMA() 方法（alpha=0.3, threshold=3.0, min=5 数据点）
+     - 新增 AnomalyResult record 记录各算法结果
+     - process() 改为 z-score + EWMA 投票，>=2/2 才告警
+
+   Go — internal/agent/monitor.go
+     - 新增 computeEWMA() 函数
+     - process() 改为 z-score + EWMA 投票，>=2/2 才告警
+
+
+2. 告警指纹去重
+   -----------------------------------------------
+   Java — MonitorAgent.java
+     - 新增 AlertFingerprint 内部类
+     - MD5("{alertName}:{service}:{sorted(labels)}") -> hex
+     - 300 秒滑动窗口抑制重复告警
+     - process() 中生成 AlertEvent 前先检查去重
+
+   Go — internal/agent/fingerprint.go（新增文件）
+     - AlertFingerprint 结构体，sync.Map 存储
+     - MD5 哈希 + 5 分钟滑动窗口
+     - monitor.go process() 中集成
+
+
+3. 知识图谱独立实现
+   -----------------------------------------------
+   Java — core/KnowledgeGraph.java（新增文件）
+     - ConcurrentHashMap + CopyOnWriteArrayList
+     - 方法：addNode, addRelationship, getDependencies, getDependents
+     - BFS 遍历、反向 BFS、简化 PageRank
+     - findRecentChanges、getTopologySummary
+     - createDemoGraph()：11 服务 + 15 边
+
+   Go — internal/model/knowledge_graph.go（新增文件）
+     - map + sync.RWMutex 实现
+     - 同上方法签名（Go 风格）
+     - CreateDemoGraph() 演示图谱
+
+   RCAAgent 改造：
+     - Java RCAAgent.java：注入 KnowledgeGraph 替代硬编码 SERVICE_TOPOLOGY
+     - Go rca.go：注入 *model.KnowledgeGraph 替代硬编码 serviceTopo
+
+
+============================================================
+P1 — 生产级能力
+============================================================
+
+4. 事件总线（内存模式 + DLQ）
+   -----------------------------------------------
+   Java — core/EventBus.java（新增文件）
+     - EventBus 接口 + InMemoryEventBus 实现
+     - publish/subscribe/start/stop/getEventLog
+     - handler 错误记录到 eventLog（DLQ 模拟）
+
+   Go — internal/core/event_bus.go（新增文件）
+     - EventBus 接口 + InMemoryEventBus 实现
+     - sync.Map 存储 subscribers，sync.RWMutex 保护 eventLog
+
+
+5. 配置外部化
+   -----------------------------------------------
+   Java — config/AiOpsProperties.java（新增文件）
+     - @ConfigurationProperties(prefix="aiops")
+     - 嵌套类：Monitor, Rca, Heal, Change, CircuitBreaker
+
+   Go — internal/config/config.go（新增文件）
+     - Config 结构体 + Load() 函数
+     - 从 os.Getenv 读取，提供默认值
+
+
+============================================================
+P2 — 丰富度提升
+============================================================
+
+6. 补齐 API 端点（+5 个，共 9 个端点）
+   -----------------------------------------------
+   Java — core/AiOpsController.java
+     - GET  /api/v1/incidents/{id}         单条事件查询
+     - GET  /api/v1/topology               拓扑概览
+     - GET  /api/v1/topology/{svc}/deps    依赖链查询
+     - POST /api/v1/anomaly/detect         异常检测
+     - GET  /api/v1/anomaly/demo           演示（合成数据）
+
+   Go — cmd/server/main.go
+     - 同上 5 个端点，Gin 路由注册
+     - 注入 model.KnowledgeGraph 用于拓扑查询
+
+
+7. 时间序列独立模块
+   -----------------------------------------------
+   Java — model/TimeSeriesDetector.java（新增文件）
+     - ThreeSigmaDetector：z-score，min=10
+     - EWMADetector：alpha=0.3, threshold=3.0, min=5
+     - EnsembleDetector：组合两检测器，min_votes=2
+     - generateDemoMetrics(n, injectAnomaly)：合成数据
+
+   Go — internal/model/time_series.go（新增文件）
+     - 同上结构，Go 风格实现
+     - GenerateDemoMetrics() 返回 values + labels
+
+
+8. docker-compose
+   -----------------------------------------------
+   Java — docker-compose.yml（新增文件）
+   Go   — docker-compose.yml（新增文件）
+   内容：Kafka + Neo4j + Prometheus + Grafana
+
+
+9. 文档更新
+   -----------------------------------------------
+    - 新增"功能对齐说明"对比表（10 项功能 x 3 语言）
+    - 更新项目结构（反映 event_bus、config、knowledge_graph 等新文件）
+    - 更新技术栈表格（双模事件总线、双模知识图谱、配置管理等）
+    - 其他更新，根据最新代码同步相关文档描述
+
+
+============================================================
+文件变更清单
+============================================================
+
+Java 新增/修改：
+  [修改] agent/MonitorAgent.java          +EWMA, +告警去重, +投票
+  [修改] agent/RCAAgent.java              接入 KnowledgeGraph
+  [新增] core/KnowledgeGraph.java         内存知识图谱
+  [新增] core/EventBus.java               接口 + InMemory 实现
+  [新增] config/AiOpsProperties.java      配置绑定
+  [新增] model/TimeSeriesDetector.java    时间序列检测器
+  [修改] core/AiOpsController.java        +5 个 API 端点
+  [新增] docker-compose.yml               基础设施
+
+Go 新增/修改：
+  [修改] internal/agent/monitor.go        +EWMA, +投票集成
+  [新增] internal/agent/fingerprint.go    告警指纹去重
+  [修改] internal/agent/rca.go            接入 KnowledgeGraph
+  [新增] internal/model/knowledge_graph.go 内存知识图谱
+  [新增] internal/core/event_bus.go       接口 + InMemory 实现
+  [新增] internal/config/config.go        配置管理
+  [新增] internal/model/time_series.go    时间序列检测器
+  [修改] cmd/server/main.go               +5 个 API 端点, +配置读取
+  [新增] docker-compose.yml               基础设施
+
+文档：
+  [修改] docs/zh/index.md                 更新对比表 + 功能对齐说明
+
+
+============================================================
+已知问题
+============================================================
+
+- Java Lombok + JDK 17.0.1 (2021 build) 存在兼容性问题（TypeTag :: UNKNOWN），
+  属于预置问题，需升级 JDK 解决，与本次功能变更无关。
+- Go 编译通过，无报错。
+
+
+============================================================
+API 端点总览（三语言一致）
+============================================================
+
+  端点                                     方法   说明
+  ----------------------------------------- ------ --------------------------
+  /                                        GET    服务信息
+  /api/v1/incidents/trigger                POST   触发故障处理工作流
+  /api/v1/incidents                        GET    事件历史列表
+  /api/v1/incidents/{id}                   GET    单条事件查询
+  /api/v1/agents/status                    GET    Agent 状态
+  /api/v1/topology                         GET    知识图谱拓扑概览
+  /api/v1/topology/{service}/dependencies  GET    服务依赖链查询
+  /api/v1/anomaly/detect                   POST   异常检测（传入数据）
+  /api/v1/anomaly/demo                     GET    异常检测演示
+  /health                                  GET    健康检查
