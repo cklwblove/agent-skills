@@ -58,6 +58,16 @@ export interface PathMapping {
 interface MappingConfig {
   exclude?: string[]
   mappings: PathMapping[]
+  preserveLocal?: PreserveRule[]
+}
+
+export interface PreserveRule {
+  /** Human-readable description of what this rule preserves */
+  description: string
+  /** Regex pattern to match lines that should be preserved from local version */
+  pattern: string
+  /** Optional glob pattern to limit which files this rule applies to (e.g., "*.md") */
+  glob?: string
 }
 
 const MAPPING_FILE = path.resolve(repoRoot, '.upstream-mapping.json')
@@ -87,6 +97,100 @@ export async function loadExcludes(): Promise<string[]> {
   const config: MappingConfig = JSON.parse(content)
   cachedExcludes = config.exclude ?? []
   return cachedExcludes
+}
+
+let cachedPreserveRules: PreserveRule[] | null = null
+
+export async function loadPreserveRules(): Promise<PreserveRule[]> {
+  if (cachedPreserveRules) return cachedPreserveRules
+  const content = await fs.readFile(MAPPING_FILE, 'utf-8')
+  const config: MappingConfig = JSON.parse(content)
+  cachedPreserveRules = config.preserveLocal ?? []
+  return cachedPreserveRules
+}
+
+/**
+ * Check if a file matches a glob pattern (simple matching for *.ext patterns).
+ */
+function matchesGlob(filePath: string, glob: string): boolean {
+  if (glob.startsWith('*.')) {
+    const ext = glob.slice(1) // e.g., ".md"
+    return filePath.endsWith(ext)
+  }
+  return filePath === glob
+}
+
+/**
+ * Merge upstream content with local content, preserving local lines that match preserve rules.
+ * For lines matching a preserve pattern, the local version is kept if it differs from upstream.
+ */
+export function applyPreserveRules(
+  upstreamContent: string,
+  localContent: string,
+  rules: PreserveRule[],
+  filePath: string
+): { content: string; preservedCount: number } {
+  if (rules.length === 0) {
+    return { content: upstreamContent, preservedCount: 0 }
+  }
+
+  // Filter rules applicable to this file
+  const applicableRules = rules.filter(
+    (rule) => !rule.glob || matchesGlob(filePath, rule.glob)
+  )
+  if (applicableRules.length === 0) {
+    return { content: upstreamContent, preservedCount: 0 }
+  }
+
+  // Compile regex patterns
+  const compiledRules = applicableRules.map((rule) => ({
+    ...rule,
+    regex: new RegExp(rule.pattern)
+  }))
+
+  const upstreamLines = upstreamContent.split('\n')
+  const localLines = localContent.split('\n')
+
+  // Build a set of local lines that match preserve patterns (for quick lookup)
+  const preservedLocalLines = new Set<string>()
+  for (const line of localLines) {
+    for (const rule of compiledRules) {
+      if (rule.regex.test(line)) {
+        preservedLocalLines.add(line.trim())
+        break
+      }
+    }
+  }
+
+  // Merge: for each upstream line, check if it matches a preserve pattern
+  // and if there's a corresponding local line to use instead
+  const result: string[] = []
+  let preservedCount = 0
+
+  for (const upstreamLine of upstreamLines) {
+    let preserved = false
+    for (const rule of compiledRules) {
+      if (rule.regex.test(upstreamLine)) {
+        // This line matches a preserve pattern - check if local has a different version
+        const matchingLocal = localLines.find(
+          (localLine) =>
+            rule.regex.test(localLine) &&
+            localLine.trim() !== upstreamLine.trim()
+        )
+        if (matchingLocal !== undefined) {
+          result.push(matchingLocal)
+          preservedCount++
+          preserved = true
+          break
+        }
+      }
+    }
+    if (!preserved) {
+      result.push(upstreamLine)
+    }
+  }
+
+  return { content: result.join('\n'), preservedCount }
 }
 
 export function isExcludedUpstreamFile(upstreamPath: string, excludes: string[]): boolean {

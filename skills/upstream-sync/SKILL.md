@@ -72,6 +72,38 @@ Generate mapping config:
 - `exclude`: upstream paths skipped entirely (never synced)
 - First match wins
 
+**Preserve local rules (`preserveLocal`):**
+
+Use `preserveLocal` to specify line patterns that should be preserved from the local version during sync. This is useful when you've made local customizations (like replacing GitHub URLs with local paths) that should not be overwritten by upstream changes.
+
+```json
+{
+  "preserveLocal": [
+    {
+      "description": "Keep local code file links instead of GitHub URLs",
+      "pattern": "\\[code/[^\\]]+\\]\\(code/",
+      "glob": "*.md"
+    },
+    {
+      "description": "Keep local relative doc links instead of GitHub absolute paths",
+      "pattern": "\\]\\(\\.\\./chapter",
+      "glob": "*.md"
+    }
+  ]
+}
+```
+
+**Preserve rule fields:**
+- `description`: Human-readable description of what this rule preserves
+- `pattern`: Regex pattern to match lines that should be preserved from local version
+- `glob` (optional): File pattern to limit which files this rule applies to (e.g., `*.md`)
+
+**How it works:**
+- During auto-merge, if a local file exists and preserve rules are configured
+- Each line in the upstream content is checked against the preserve patterns
+- If a line matches a pattern AND the local file has a different version of that line
+- The local version is preserved instead of being overwritten by upstream
+
 ### Step 3: Initialize State
 
 Create `<PROJECT_ROOT>/sync-state.json` with the starting commit:

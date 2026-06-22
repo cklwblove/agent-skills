@@ -24,10 +24,12 @@ import { promises as fs } from 'node:fs'
 import {
   type FileChange,
   type PathMapping,
+  type PreserveRule,
   type SyncState,
   repoRoot,
   loadPathMappings,
   loadExcludes,
+  loadPreserveRules,
   isExcludedUpstreamFile,
   mapUpstreamPath,
   isMappedUpstreamFile,
@@ -44,7 +46,8 @@ import {
   getFilesOnDisk,
   loadSyncState,
   saveSyncState,
-  formatSyncReport
+  formatSyncReport,
+  applyPreserveRules
 } from './sync-utils'
 
 // ---------------------------------------------------------------------------
@@ -325,6 +328,15 @@ async function phaseMerge(
 
   mergeInProgress = true
 
+  // Load preserve rules
+  const preserveRules = await loadPreserveRules()
+  if (preserveRules.length > 0) {
+    log(`Preserve rules loaded: ${preserveRules.length} rules`)
+    for (const rule of preserveRules) {
+      log(`  - ${rule.description}`)
+    }
+  }
+
   // Snapshot the file list before merge (for integrity check)
   const targetDirs = getLocalTargetDirs(mappings)
   const targetFiles = getLocalTargetFiles(mappings)
@@ -343,6 +355,7 @@ async function phaseMerge(
 
     let appliedCount = 0
     let skippedCount = 0
+    let preservedCount = 0
 
     for (const mc of mappedChanges) {
       if (!mc.localPath) continue
@@ -370,10 +383,32 @@ async function phaseMerge(
 
       // For auto-merge files: fetch content from upstream commit and write to local path
       try {
-        const content = await execGit(['show', `${toCommit}:${mc.path}`])
+        const upstreamContent = await execGit(['show', `${toCommit}:${mc.path}`])
         const localDir = path.dirname(localAbs)
         await fs.mkdir(localDir, { recursive: true })
-        await fs.writeFile(localAbs, content + '\n', 'utf-8')
+
+        // Apply preserve rules if local file exists
+        let finalContent = upstreamContent
+        if (preserveRules.length > 0) {
+          try {
+            const localContent = await fs.readFile(localAbs, 'utf-8')
+            const { content, preservedCount: count } = applyPreserveRules(
+              upstreamContent,
+              localContent,
+              preserveRules,
+              mc.localPath
+            )
+            finalContent = content
+            if (count > 0) {
+              log(`  Preserved ${count} local lines in: ${mc.localPath}`)
+              preservedCount += count
+            }
+          } catch {
+            // Local file doesn't exist yet, use upstream content as-is
+          }
+        }
+
+        await fs.writeFile(localAbs, finalContent + '\n', 'utf-8')
         appliedCount++
       } catch (error) {
         warn(`  Failed to fetch upstream file: ${mc.path}`)
@@ -381,7 +416,7 @@ async function phaseMerge(
       }
     }
 
-    log(`Applied: ${appliedCount} files, Skipped: ${skippedCount} files`)
+    log(`Applied: ${appliedCount} files, Skipped: ${skippedCount} files, Preserved: ${preservedCount} local lines`)
 
     // Integrity check
     const filesAfter = new Set<string>()
