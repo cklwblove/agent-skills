@@ -255,7 +255,7 @@ python skills/xianyu-sensitive-word-check/examples/business_cases.py
 | 多风格选版 | 对话中说「四种都要」，对比后选一版微调 |
 | 批量上架 | 生成后 `validate_listing.py` 快检，高危词命中则改写 |
 | 品类优化 | Agent 读取 `references/category_keywords.md` 埋搜索词 |
-| 虚拟商品资料 | 先读 `references/virtual_goods.md`；交付写闲鱼内发货，拒绝盗版/代写类 |
+| 虚拟商品资料 | 先读 `references/virtual_goods.md`；详情必含四节：资料简介、核心内容、技术栈、适用人群 |
 
 **CLI 速查**：
 

@@ -43,12 +43,32 @@ def scan_text(text: str, field: str) -> list[dict]:
     return hits
 
 
+VIRTUAL_SECTIONS = ["资料简介", "核心内容", "技术栈", "适用人群"]
+
+
+def check_virtual_sections(body: str) -> list[dict]:
+    issues = []
+    for sec in VIRTUAL_SECTIONS:
+        if sec not in body:
+            issues.append({"field": "body", "type": "section", "level": "warn", "msg": f"缺少必填节：{sec}"})
+    core = body.split("核心内容", 1)
+    if len(core) > 1:
+        block = core[1].split("技术栈", 1)[0]
+        bullets = [ln for ln in block.splitlines() if ln.strip().startswith(("-", "•", "·", "*"))]
+        if len(bullets) < 3:
+            issues.append({"field": "body", "type": "content", "level": "warn", "msg": "核心内容建议至少 3 条分点"})
+    return issues
+
+
 def main():
     p = argparse.ArgumentParser(description="闲鱼文案快检")
     p.add_argument("--title", required=True)
     p.add_argument("--body", default="")
+    p.add_argument("--virtual", action="store_true", help="虚拟资料：检查四节完整性")
     args = p.parse_args()
     issues = check_title(args.title) + scan_text(args.title, "title") + scan_text(args.body, "body")
+    if args.virtual and args.body:
+        issues.extend(check_virtual_sections(args.body))
     high = [i for i in issues if i.get("level") == "high"]
     out = {
         "ok": len(high) == 0,
