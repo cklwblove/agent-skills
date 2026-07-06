@@ -61,6 +61,19 @@ agent-skills/
 
 **何时使用**：用户提到闲鱼敏感词、违禁词、极限词、广告法禁用词，或在闲鱼/Xianyu 发布前校验商品文案、降低下架/限流风险时。
 
+### xianyu-listing-copywriter
+
+闲鱼卖货商品文案生成器。一键产出高转化、接地气、易发布的标题与正文。特点：
+
+- 覆盖**实物闲置**与**虚拟商品资料**（学习笔记、题库、模板、电子版等）
+- 四种风格：简洁直出 / 真实走心 / 捡漏超值 / 专业靠谱
+- 自动提取商品信息，标题 15–20 字并嵌入品类搜索词
+- 正文分段口语化，结尾附带交易提示（包邮/小刀/退换）
+- 内置合规自检，可与 `xianyu-sensitive-word-check` 联动复检
+- 可选 CLI：`scripts/validate_listing.py`（标题字数 + 高危词快检）
+
+**何时使用**：用户提到写闲鱼文案、生成商品描述、虚拟商品资料/电子资料文案、优化标题、卖货 copy、二手发布文案，或需要四种风格对比输出时。
+
 ## 使用方式
 
 ### 安装技能
@@ -84,6 +97,9 @@ cp -r skills/upstream-sync ~/.cursor/skills/
 
 # 示例：安装 xianyu-sensitive-word-check
 cp -r skills/xianyu-sensitive-word-check ~/.cursor/skills/
+
+# 示例：安装 xianyu-listing-copywriter
+cp -r skills/xianyu-listing-copywriter ~/.cursor/skills/
 ```
 
 `upstream-sync` 首次使用时，还需将脚本复制到**目标项目**根目录（若尚未存在）：
@@ -141,7 +157,25 @@ cp skills/upstream-sync/scripts/sync-utils.ts <PROJECT_ROOT>/scripts/
 用 xianyu-sensitive-word-check 审查这份商品描述再给出合规改写
 ```
 
-Agent 会按各 `SKILL.md` 中的流程执行。`project-changelog` 会在**目标项目仓库根目录**写出 `更新日志_2026-05-20_v1.2.0.txt`（不写入 Skill 目录本身）。
+**xianyu-listing-copywriter**
+
+```
+帮我写闲鱼文案：iPhone 13 128G 黑色 9成新，2200 包邮，风格走心
+```
+
+```
+生成四种风格的闲鱼标题和正文，商品是戴森 V10 吸尘器，1500 可小刀
+```
+
+```
+把这段文案改短一点，突出性价比，顺便做敏感词自检
+```
+
+```
+帮我写虚拟商品资料文案：考研政治笔记 PDF 200页，15元，自己整理的
+```
+
+Agent 会按各 `SKILL.md` 中的流程执行。
 
 ### project-changelog 集成到其他工作流
 
@@ -212,6 +246,23 @@ python skills/xianyu-sensitive-word-check/examples/business_cases.py
 | 存在风险 | 仅有中/低危命中 |
 | 不建议发布 | 存在高危命中 |
 
+### xianyu-listing-copywriter 集成到其他工作流
+
+| 场景 | 做法 |
+|------|------|
+| 从零写文案 | 提供商品信息 + 风格 → Agent 输出标题/正文/交易提示 |
+| 发布前双检 | 先用本技能生成，再用 `xianyu-sensitive-word-check` 复检终稿 |
+| 多风格选版 | 对话中说「四种都要」，对比后选一版微调 |
+| 批量上架 | 生成后 `validate_listing.py` 快检，高危词命中则改写 |
+| 品类优化 | Agent 读取 `references/category_keywords.md` 埋搜索词 |
+| 虚拟商品资料 | 先读 `references/virtual_goods.md`；交付写闲鱼内发货，拒绝盗版/代写类 |
+
+**CLI 速查**：
+
+```bash
+python skills/xianyu-listing-copywriter/scripts/validate_listing.py --title "标题" --body "正文"
+```
+
 ### 技能目录速查
 
 ```
@@ -241,6 +292,15 @@ skills/xianyu-sensitive-word-check/
 └── examples/
     ├── business_cases.py             # 13 个业务场景示例
     └── examples.md                   # 案例说明
+
+skills/xianyu-listing-copywriter/
+├── SKILL.md                          # 生成流程与输出模板
+├── references/
+│   ├── style_templates.md            # 四种风格范例
+│   ├── category_keywords.md          # 品类搜索词与风格推荐
+│   ├── compliance_rules.md           # 合规自检规则
+│   └── virtual_goods.md              # 虚拟商品资料专项规则
+└── scripts/validate_listing.py       # 标题字数 + 高危词快检
 
 # project-changelog 成品输出位置（在业务项目根目录，非本仓库）
 更新日志_2026-05-20_v1.0.1.txt
