@@ -78,6 +78,46 @@ agent-skills/
 
 ### 安装技能
 
+#### 方式一：Skills CLI（推荐）
+
+使用 [Skills CLI](https://skills.sh/)（`npx skills`）从 GitHub 安装，会自动写入当前 Agent 的 skills 目录：
+
+```bash
+# 安装本仓库全部技能（全局，跳过确认）
+npx skills add cklwblove/agent-skills --all -g
+
+# 安装单个技能
+npx skills add cklwblove/agent-skills --skill project-changelog -g -y
+# 或用 @ 语法
+npx skills add cklwblove/agent-skills@project-changelog -g -y
+
+# 仅安装到当前项目（不写全局目录）
+npx skills add cklwblove/agent-skills --skill upstream-sync -y
+
+# 查看本仓库有哪些技能（不实际安装）
+npx skills add cklwblove/agent-skills --list
+
+# 搜索生态中的其他技能
+npx skills find changelog
+
+# 管理已安装技能
+npx skills list          # 列出已安装
+npx skills update -g     # 更新全局技能
+npx skills remove project-changelog -g -y   # 卸载
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-g, --global` | 安装到用户级目录，所有项目可用 |
+| `-y, --yes` | 跳过确认提示 |
+| `--skill <name>` | 只安装指定技能；`--all` 安装仓库内全部 |
+| `--agent <name>` | 指定 Agent，如 `cursor`、`claude-code`；默认自动检测 |
+| `--list` | 列出仓库内可用技能，不实际安装 |
+
+本仓库可用技能：`fullstack-webapp-builder`、`project-changelog`、`upstream-sync`、`vitepress-course-tools-setup`、`xianyu-listing-copywriter`、`xianyu-sensitive-word-check`。
+
+#### 方式二：手动复制
+
 将对应技能目录复制到 AI 环境的 Skills 目录（或把 `SKILL.md` 加入项目知识库）：
 
 | 环境 | 路径示例 |
