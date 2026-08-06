@@ -44,7 +44,8 @@ agent-skills/
 
 - 基于 commit SHA 追踪，只同步增量变更
 - 通过 `.upstream-mapping.json` 处理上下游目录结构差异
-- 小变更（< 30 行）自动合并，大变更、本地修改、`SUMMARY.md` 等标记为人工审阅
+- 小变更（< 30 行）自动合并，大变更、本地修改、删除、`SUMMARY.md` 等标记为人工审阅（删除不自动抹本地）
+- 映射内新文件自动写入并 stage；无映射的上游新路径写入报告并给出建议 mapping
 - 同步前自动创建 `backup/pre-sync-<ts>` 与 `sync/<ts>` 分支，支持回退
 - 脚本：`scripts/sync-upstream.ts`（5 阶段编排）、`scripts/sync-utils.ts`（路径映射与校验）
 
@@ -249,8 +250,9 @@ Agent 会按各 `SKILL.md` 中的流程执行。
 
 - [ ] `upstream` remote 已配置且 `git fetch upstream` 成功
 - [ ] `.upstream-mapping.json` 中目录映射以 `/` 结尾，文件映射无尾斜杠
+- [ ] 报告中无未处理的 **Unmapped Upstream Paths**（或已补 mapping 并重跑）
 - [ ] `sync-state.json` 中 `last_synced_commit` 与预期起点一致
-- [ ] 已审阅 `sync-conflict-report.md` 中 manual-review 项
+- [ ] 已审阅 `sync-conflict-report.md` 中 manual-review 项（含上游删除）
 - [ ] 合并分支 `sync/<timestamp>` 经完整性校验后再合入 `main`
 
 **CLI 速查**（在目标项目根目录）：

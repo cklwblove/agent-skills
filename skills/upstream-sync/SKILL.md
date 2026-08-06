@@ -134,14 +134,15 @@ node --import tsx scripts/sync-upstream.ts --from <COMMIT_SHA>
 
 ### Step 5: Review & Merge
 
-1. Check terminal output for auto-merged vs manual-review files
-2. Review `sync-conflict-report.md` for details
-3. Handle manual-review files (large diffs >= 30 lines, deleted files, SUMMARY.md):
+1. Check terminal output for auto-merged, manual-review, and **unmapped** files
+2. Review `sync-conflict-report.md` for details (includes suggested mapping JSON for unmapped paths)
+3. If unmapped new upstream dirs appear: add suggested entries to `.upstream-mapping.json`, then re-run sync
+4. Handle manual-review files (large diffs >= 30 lines, deleted files, SUMMARY.md):
    ```bash
    git show upstream/main:<upstream-path>   # view upstream version
    # edit local file, then stage + commit
    ```
-4. Merge into main:
+5. Merge into main:
    ```bash
    git checkout main
    git merge sync/<timestamp>
@@ -152,24 +153,36 @@ node --import tsx scripts/sync-upstream.ts --from <COMMIT_SHA>
 
 | Condition | Handling |
 |-----------|----------|
-| New file (added) | Auto-merge |
+| New file (added) within mapped path | Auto-merge — write new local file + `git add` |
+| Rename within mapped path | Auto-merge — write new path, remove old local path |
 | < 30 lines, no local modifications | Auto-merge |
-| >= 30 lines changed | Manual review |
+| >= 30 lines changed | Manual review — keep local, do not overwrite |
 | Has local-only modifications | Manual review |
-| File deleted upstream | Manual review |
-| `SUMMARY.md` | Always manual review |
+| File deleted upstream | Manual review — **keep local file** until reviewed |
+| `SUMMARY.md` (any depth) | Always manual review |
+| Path matches no mapping rule | **Not synced** — listed in report with suggested mapping |
+
+## Unmapped New Paths
+
+Upstream may add new top-level directories that are not in `.upstream-mapping.json`. These are **not** silently ignored:
+
+1. Phase 2 prints each unmapped path with kind (`added` / `modified` / …)
+2. Suggests mapping entries inferred from existing local prefix (e.g. `docs/zh/`)
+3. Writes them into `sync-conflict-report.md` under **Unmapped Upstream Paths**
+4. After you add the mappings, re-run sync to pull those files
 
 ## Integrity Verification
 
 Post-merge checks:
 - Directory targets exist and contain non-empty `.md` files
 - File targets exist and are non-empty
-- No files lost compared to pre-merge snapshot
+- New files written from upstream are listed
+- No files lost compared to pre-merge snapshot (deleted upstream files are not auto-removed)
 
 ## Sync Phases
 
 1. **Prepare** — read state, fetch upstream, detect new commits
-2. **Analyse** — diff files, apply path mapping + exclude, classify auto vs manual
+2. **Analyse** — diff files, apply path mapping + exclude, classify auto vs manual, warn on unmapped
 3. **Backup** — create `backup/pre-sync-<ts>` and `sync/<ts>` branches
-4. **Merge** — file-by-file via `git show <commit>:<path>`, write to mapped local path
-5. **Report** — update state, print summary, save report
+4. **Merge** — file-by-file via `git show <commit>:<path>`, write/add mapped local paths, stage dirs + files + applied paths
+5. **Report** — update state, print summary (incl. unmapped + suggestions), save report

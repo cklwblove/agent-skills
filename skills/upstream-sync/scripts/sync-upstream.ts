@@ -24,17 +24,18 @@ import { promises as fs } from 'node:fs'
 import {
   type FileChange,
   type PathMapping,
-  type PreserveRule,
   type SyncState,
+  type UnmappedChange,
   repoRoot,
   loadPathMappings,
   loadExcludes,
   loadPreserveRules,
   isExcludedUpstreamFile,
   mapUpstreamPath,
-  isMappedUpstreamFile,
   getLocalTargetDirs,
   getLocalTargetFiles,
+  suggestMappingsForUnmapped,
+  isSummaryFile,
   execGit,
   getCurrentBranch,
   getLatestCommit,
@@ -225,7 +226,7 @@ async function phaseAnalyse(fromCommit: string, toCommit: string) {
 
   // Apply path mapping and filter to only mapped files
   const mappedChanges: MappedChange[] = []
-  const unmappedUpstream: string[] = []
+  const unmappedUpstream: UnmappedChange[] = []
   const excludedUpstream: string[] = []
 
   for (const change of allChanges) {
@@ -237,21 +238,57 @@ async function phaseAnalyse(fromCommit: string, toCommit: string) {
     if (localPath) {
       mappedChanges.push({ ...change, localPath })
     } else {
-      unmappedUpstream.push(change.path)
+      unmappedUpstream.push({ path: change.path, kind: change.kind })
     }
   }
 
   if (excludedUpstream.length > 0) {
     log(`${excludedUpstream.length} upstream files excluded: ${excludedUpstream.join(', ')}`)
   }
+
+  const suggestedMappings = suggestMappingsForUnmapped(
+    unmappedUpstream.map((u) => u.path),
+    mappings
+  )
+
   if (unmappedUpstream.length > 0) {
-    log(`${unmappedUpstream.length} upstream files have no mapping (skipped)`)
+    warn(`${unmappedUpstream.length} upstream files have no mapping (NOT synced):`)
+    for (const u of unmappedUpstream) {
+      const sign = u.kind === 'added' ? '+' : u.kind === 'deleted' ? '-' : u.kind === 'renamed' ? '>' : '~'
+      console.log(`    ${sign} ${u.path}  (${u.kind})`)
+    }
+    if (suggestedMappings.length > 0) {
+      warn('Suggested .upstream-mapping.json entries:')
+      console.log(JSON.stringify(suggestedMappings, null, 2))
+      warn('Add these mappings and re-run sync to pull new upstream paths.')
+    }
   }
 
   log(`Mapped files to sync: ${mappedChanges.length}`)
 
   if (mappedChanges.length === 0) {
-    log('No mappable file changes detected.')
+    if (unmappedUpstream.length > 0) {
+      warn('No mappable file changes. Only unmapped upstream paths found — update mappings and retry.')
+      // Still write a lightweight report so the operator has the suggested mappings
+      const report = formatSyncReport(
+        fromCommit,
+        toCommit,
+        await getCommitMessage(fromCommit),
+        await getCommitMessage(toCommit),
+        { autoMerge: [], manualReview: [] },
+        { passed: true, missingFiles: [], emptyFiles: [], newFiles: [], removedFiles: [] },
+        unmappedUpstream,
+        suggestedMappings
+      )
+      if (!DRY_RUN) {
+        await fs.writeFile(path.resolve(repoRoot, 'sync-conflict-report.md'), report, 'utf-8')
+        log('Report saved to: sync-conflict-report.md')
+      } else {
+        console.log('\n' + report)
+      }
+    } else {
+      log('No mappable file changes detected.')
+    }
     process.exit(0)
   }
 
@@ -266,6 +303,14 @@ async function phaseAnalyse(fromCommit: string, toCommit: string) {
   log(`Auto-merge: ${assessment.autoMerge.length} files`)
   log(`Manual review: ${assessment.manualReview.length} files`)
 
+  const addedAuto = assessment.autoMerge.filter((f) => f.kind === 'added' || f.kind === 'renamed')
+  if (addedAuto.length > 0) {
+    log(`New/renamed files to add: ${addedAuto.length}`)
+    for (const f of addedAuto) {
+      console.log(`    + ${f.path}  (${f.kind})`)
+    }
+  }
+
   if (assessment.manualReview.length > 0) {
     warn('The following files need manual review:')
     for (const f of assessment.manualReview) {
@@ -273,12 +318,12 @@ async function phaseAnalyse(fromCommit: string, toCommit: string) {
       if (f.hasLocalChanges) reasons.push('local changes')
       if (f.linesAdded + f.linesDeleted >= 30) reasons.push('large diff')
       if (f.kind === 'deleted') reasons.push('deleted')
-      if (f.path === 'SUMMARY.md') reasons.push('structure file')
-      console.log(`    - ${f.path}  (${reasons.join(', ')})`)
+      if (isSummaryFile(f.path)) reasons.push('structure file')
+      console.log(`    - ${f.path}  (${reasons.join(', ') || f.kind})`)
     }
   }
 
-  return { mappedChanges, assessment, mappings }
+  return { mappedChanges, assessment, mappings, unmappedUpstream, suggestedMappings }
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +368,11 @@ async function phaseMerge(
 
   if (DRY_RUN) {
     log('[dry-run] Would apply upstream changes file by file')
+    for (const f of assessment.autoMerge) {
+      const action =
+        f.kind === 'added' ? 'ADD' : f.kind === 'renamed' ? 'RENAME→ADD' : f.kind === 'deleted' ? 'DELETE' : 'UPDATE'
+      console.log(`    [dry-run] ${action} ${f.path}`)
+    }
     return
   }
 
@@ -347,26 +397,45 @@ async function phaseMerge(
       filesBefore.add(`${dir}/${f}`)
     }
   }
+  for (const f of targetFiles) {
+    filesBefore.add(f)
+  }
 
   try {
-    // Build sets for quick lookup
     const autoMergeLocals = new Set(assessment.autoMerge.map((f) => f.path))
     const manualReviewLocals = new Set(assessment.manualReview.map((f) => f.path))
 
     let appliedCount = 0
+    let addedCount = 0
     let skippedCount = 0
     let preservedCount = 0
+    const stagedPaths = new Set<string>()
 
     for (const mc of mappedChanges) {
       if (!mc.localPath) continue
 
       const localAbs = path.resolve(repoRoot, mc.localPath)
 
-      // Handle deleted files
+      // Manual-review first — including deleted files (keep local until reviewed)
+      if (manualReviewLocals.has(mc.localPath)) {
+        warn(`  Skipped (needs manual review): ${mc.localPath}${mc.kind === 'deleted' ? ' [upstream deleted]' : ''}`)
+        skippedCount++
+        continue
+      }
+
+      // Only auto-merge set proceeds
+      if (!autoMergeLocals.has(mc.localPath)) {
+        warn(`  Skipped (not in auto-merge set): ${mc.localPath}`)
+        skippedCount++
+        continue
+      }
+
+      // Deleted (only if somehow auto-merged — currently never; kept for safety)
       if (mc.kind === 'deleted') {
         try {
           await fs.unlink(localAbs)
           log(`  Deleted: ${mc.localPath}`)
+          stagedPaths.add(mc.localPath)
         } catch {
           // Already gone
         }
@@ -374,22 +443,35 @@ async function phaseMerge(
         continue
       }
 
-      // For manual-review files: keep local version, skip overwrite
-      if (manualReviewLocals.has(mc.localPath)) {
-        warn(`  Skipped (needs manual review): ${mc.localPath}`)
-        skippedCount++
-        continue
+      // Renamed: remove old local path when it maps
+      if (mc.kind === 'renamed' && mc.oldPath) {
+        const oldLocal = mapUpstreamPath(mc.oldPath, mappings)
+        if (oldLocal && oldLocal !== mc.localPath) {
+          try {
+            await fs.unlink(path.resolve(repoRoot, oldLocal))
+            log(`  Removed old path after rename: ${oldLocal}`)
+            stagedPaths.add(oldLocal)
+          } catch {
+            // Old path already absent
+          }
+        }
       }
 
-      // For auto-merge files: fetch content from upstream commit and write to local path
+      // Auto-merge: fetch upstream content and write to local path (covers added + modified + renamed)
       try {
         const upstreamContent = await execGit(['show', `${toCommit}:${mc.path}`])
         const localDir = path.dirname(localAbs)
         await fs.mkdir(localDir, { recursive: true })
 
-        // Apply preserve rules if local file exists
         let finalContent = upstreamContent
-        if (preserveRules.length > 0) {
+        let isNewFile = false
+        try {
+          await fs.access(localAbs)
+        } catch {
+          isNewFile = true
+        }
+
+        if (preserveRules.length > 0 && !isNewFile) {
           try {
             const localContent = await fs.readFile(localAbs, 'utf-8')
             const { content, preservedCount: count } = applyPreserveRules(
@@ -404,19 +486,28 @@ async function phaseMerge(
               preservedCount += count
             }
           } catch {
-            // Local file doesn't exist yet, use upstream content as-is
+            // Fall through with upstream content
           }
         }
 
-        await fs.writeFile(localAbs, finalContent + '\n', 'utf-8')
+        await fs.writeFile(localAbs, finalContent.endsWith('\n') ? finalContent : finalContent + '\n', 'utf-8')
+        stagedPaths.add(mc.localPath)
         appliedCount++
-      } catch (error) {
+        if (isNewFile || mc.kind === 'added' || mc.kind === 'renamed') {
+          addedCount++
+          log(`  Added: ${mc.localPath}`)
+        } else {
+          log(`  Updated: ${mc.localPath}`)
+        }
+      } catch {
         warn(`  Failed to fetch upstream file: ${mc.path}`)
         skippedCount++
       }
     }
 
-    log(`Applied: ${appliedCount} files, Skipped: ${skippedCount} files, Preserved: ${preservedCount} local lines`)
+    log(
+      `Applied: ${appliedCount} files (${addedCount} new), Skipped: ${skippedCount}, Preserved: ${preservedCount} local lines`
+    )
 
     // Integrity check
     const filesAfter = new Set<string>()
@@ -424,6 +515,14 @@ async function phaseMerge(
       const dirFiles = await getFilesOnDisk(dir)
       for (const f of dirFiles) {
         filesAfter.add(`${dir}/${f}`)
+      }
+    }
+    for (const f of targetFiles) {
+      try {
+        await fs.access(path.resolve(repoRoot, f))
+        filesAfter.add(f)
+      } catch {
+        // absent
       }
     }
     const integrity = await verifyIntegrity(filesBefore, filesAfter, targetDirs, targetFiles)
@@ -439,6 +538,9 @@ async function phaseMerge(
       warn('Review the issues above before committing.')
     } else {
       log('Integrity check PASSED')
+      if (integrity.newFiles.length > 0) {
+        log(`Integrity: ${integrity.newFiles.length} new local files detected`)
+      }
     }
 
     // Build verification (optional)
@@ -479,18 +581,35 @@ async function phaseMerge(
     }
     await saveSyncState(state)
 
-    // Commit: stage sync-state.json + all files in mapped target dirs
+    // Commit: stage sync-state + mapped dirs + mapped files + every applied path
     await execGit(['add', 'sync-state.json'])
     for (const dir of targetDirs) {
-      await execGit(['add', dir])
+      try {
+        await execGit(['add', '--', dir])
+      } catch {
+        warn(`  Could not stage directory: ${dir}`)
+      }
+    }
+    for (const f of targetFiles) {
+      try {
+        await execGit(['add', '--', f])
+      } catch {
+        // file may be absent (manual review skipped)
+      }
+    }
+    for (const p of stagedPaths) {
+      try {
+        await execGit(['add', '--', p])
+      } catch {
+        warn(`  Could not stage: ${p}`)
+      }
     }
 
     const autoCount = assessment.autoMerge.length
     const manualCount = assessment.manualReview.length
-    const commitMsg = `sync: merge upstream (${autoCount} auto, ${manualCount} manual review)`
+    const commitMsg = `sync: merge upstream (${autoCount} auto, ${manualCount} manual review, ${addedCount} added)`
     await execGit(['commit', '-m', commitMsg])
     log(`Committed: ${commitMsg}`)
-
   } catch (error) {
     warn('Sync phase failed. Cleaning up...')
     try {
@@ -518,7 +637,9 @@ async function phaseReport(
   assessment: { autoMerge: FileChange[]; manualReview: FileChange[] },
   mappings: PathMapping[],
   backupBranch: string,
-  syncBranch: string
+  syncBranch: string,
+  unmappedUpstream: UnmappedChange[] = [],
+  suggestedMappings: PathMapping[] = []
 ) {
   log('Phase 5: Report')
 
@@ -532,11 +653,28 @@ async function phaseReport(
       filesAfter.add(`${dir}/${f}`)
     }
   }
+  for (const f of targetFiles) {
+    try {
+      await fs.access(path.resolve(repoRoot, f))
+      filesAfter.add(f)
+    } catch {
+      // absent
+    }
+  }
   const filesBefore = await getFilesAtCommit(fromCommit, targetDirs[0] || 'docs/zh')
   const integrity = await verifyIntegrity(filesBefore, filesAfter, targetDirs, targetFiles)
 
   // Print report
-  const report = formatSyncReport(fromCommit, toCommit, fromMessage, toMessage, assessment, integrity)
+  const report = formatSyncReport(
+    fromCommit,
+    toCommit,
+    fromMessage,
+    toMessage,
+    assessment,
+    integrity,
+    unmappedUpstream,
+    suggestedMappings
+  )
   console.log('\n' + report)
 
   // Save report to file (not committed — it's a working artifact)
@@ -549,13 +687,17 @@ async function phaseReport(
   log('Sync complete!')
   log(`Backup branch: ${backupBranch}`)
   log(`Sync branch:   ${syncBranch}`)
+  if (unmappedUpstream.length > 0) {
+    warn(`${unmappedUpstream.length} unmapped upstream paths were NOT synced.`)
+    warn('Update .upstream-mapping.json (see suggested entries in the report), then re-run.')
+  }
   if (assessment.manualReview.length > 0) {
     warn(`${assessment.manualReview.length} files need manual review.`)
     warn('Review them, then merge sync branch into main:')
     console.log(`    git checkout main`)
     console.log(`    git merge ${syncBranch}`)
-  } else {
-    log('All files were auto-merged. Merge sync branch into main:')
+  } else if (unmappedUpstream.length === 0) {
+    log('All mapped files were auto-merged. Merge sync branch into main:')
     console.log(`    git checkout main`)
     console.log(`    git merge ${syncBranch}`)
   }
@@ -579,7 +721,8 @@ async function main() {
   const { state, remoteRef, fromCommit, latestUpstream, fromMessage, toMessage } = await phasePrepare()
 
   // Phase 2
-  const { mappedChanges, assessment, mappings } = await phaseAnalyse(fromCommit, latestUpstream)
+  const { mappedChanges, assessment, mappings, unmappedUpstream, suggestedMappings } =
+    await phaseAnalyse(fromCommit, latestUpstream)
 
   // Phase 3
   const { backupBranch, syncBranch } = await phaseBackup()
@@ -588,7 +731,19 @@ async function main() {
   await phaseMerge(remoteRef, state, fromCommit, latestUpstream, mappedChanges, assessment, mappings)
 
   // Phase 5
-  await phaseReport(state, fromCommit, latestUpstream, fromMessage, toMessage, assessment, mappings, backupBranch, syncBranch)
+  await phaseReport(
+    state,
+    fromCommit,
+    latestUpstream,
+    fromMessage,
+    toMessage,
+    assessment,
+    mappings,
+    backupBranch,
+    syncBranch,
+    unmappedUpstream,
+    suggestedMappings
+  )
 }
 
 main().catch((error) => {

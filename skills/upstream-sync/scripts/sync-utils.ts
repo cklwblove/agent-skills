@@ -209,12 +209,73 @@ export function isExcludedUpstreamFile(upstreamPath: string, excludes: string[])
 export function mapUpstreamPath(upstreamPath: string, mappings: PathMapping[]): string | null {
   const normalized = upstreamPath.replace(/\\/g, '/')
   for (const mapping of mappings) {
-    if (normalized.startsWith(mapping.upstream)) {
-      const relative = normalized.slice(mapping.upstream.length)
-      return path.posix.join(mapping.local, relative)
+    if (mapping.upstream.endsWith('/')) {
+      if (normalized.startsWith(mapping.upstream)) {
+        const relative = normalized.slice(mapping.upstream.length)
+        return path.posix.join(mapping.local, relative)
+      }
+    } else if (normalized === mapping.upstream) {
+      return mapping.local
     }
   }
   return null
+}
+
+/**
+ * Extract top-level upstream prefix for an unmapped path.
+ * Directory entries end with `/`; root-level files stay as-is.
+ */
+export function getUpstreamTopLevel(upstreamPath: string): string {
+  const normalized = upstreamPath.replace(/\\/g, '/')
+  const slash = normalized.indexOf('/')
+  if (slash === -1) return normalized
+  return normalized.slice(0, slash + 1)
+}
+
+/**
+ * Suggest mapping entries for unmapped upstream paths, based on existing dir mappings.
+ */
+export function suggestMappingsForUnmapped(
+  unmappedPaths: string[],
+  mappings: PathMapping[]
+): PathMapping[] {
+  const tops = new Set<string>()
+  for (const p of unmappedPaths) {
+    tops.add(getUpstreamTopLevel(p))
+  }
+
+  const dirMappings = mappings.filter((m) => m.upstream.endsWith('/'))
+  let localBase = ''
+  if (dirMappings.length > 0) {
+    // e.g. docs/zh/01_intro/ → docs/zh/
+    const sample = dirMappings[0].local.replace(/\/+$/, '')
+    const idx = sample.lastIndexOf('/')
+    localBase = idx === -1 ? '' : sample.slice(0, idx + 1)
+  }
+
+  const suggestions: PathMapping[] = []
+  for (const top of [...tops].sort()) {
+    // Already covered by an existing mapping → skip
+    const probe = top.endsWith('/') ? `${top}__probe__` : top
+    if (mapUpstreamPath(probe, mappings) !== null) continue
+    if (!top.endsWith('/')) {
+      // Root-level file
+      suggestions.push({ upstream: top, local: localBase ? `${localBase}${top}` : top })
+      continue
+    }
+    const name = top.slice(0, -1)
+    suggestions.push({
+      upstream: top,
+      local: localBase ? `${localBase}${name}/` : top
+    })
+  }
+  return suggestions
+}
+
+/** True if path is SUMMARY.md at any depth. */
+export function isSummaryFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/')
+  return normalized === 'SUMMARY.md' || normalized.endsWith('/SUMMARY.md')
 }
 
 /**
@@ -393,8 +454,8 @@ export async function assessChanges(changes: FileChange[]): Promise<AssessResult
   for (const change of changes) {
     change.hasLocalChanges = localChanges.has(change.path)
 
-    // SUMMARY.md always needs manual review
-    if (change.path === 'SUMMARY.md') {
+    // SUMMARY.md (any depth) always needs manual review
+    if (isSummaryFile(change.path)) {
       manualReview.push(change)
       continue
     }
@@ -407,6 +468,12 @@ export async function assessChanges(changes: FileChange[]): Promise<AssessResult
 
     // New files can always be auto-merged (no local conflict possible)
     if (change.kind === 'added') {
+      autoMerge.push(change)
+      continue
+    }
+
+    // Renames: treat like new file at target path if no local conflict on new path
+    if (change.kind === 'renamed' && !change.hasLocalChanges) {
       autoMerge.push(change)
       continue
     }
@@ -608,13 +675,20 @@ export async function saveSyncState(state: SyncState): Promise<void> {
 // Report generation
 // ---------------------------------------------------------------------------
 
+export interface UnmappedChange {
+  path: string
+  kind: ChangeKind
+}
+
 export function formatSyncReport(
   fromCommit: string,
   toCommit: string,
   fromMessage: string,
   toMessage: string,
   assessment: AssessResult,
-  integrity: IntegrityCheckResult
+  integrity: IntegrityCheckResult,
+  unmapped: UnmappedChange[] = [],
+  suggestedMappings: PathMapping[] = []
 ): string {
   const lines: string[] = []
 
@@ -631,7 +705,8 @@ export function formatSyncReport(
     lines.push('_No files were auto-merged._')
   } else {
     for (const f of assessment.autoMerge) {
-      const sign = f.kind === 'added' ? '+' : f.kind === 'deleted' ? '-' : '~'
+      const sign =
+        f.kind === 'added' ? '+' : f.kind === 'deleted' ? '-' : f.kind === 'renamed' ? '>' : '~'
       lines.push(`- \`${f.path}\` (${sign} ${f.linesAdded}/${f.linesDeleted})`)
     }
   }
@@ -648,8 +723,33 @@ export function formatSyncReport(
       if (f.hasLocalChanges) reasons.push('has local changes')
       if (f.linesAdded + f.linesDeleted >= LINES_THRESHOLD) reasons.push('large change')
       if (f.kind === 'deleted') reasons.push('file deleted')
-      if (f.path === 'SUMMARY.md') reasons.push('structure file')
-      lines.push(`- \`${f.path}\` — ${reasons.join(', ')}`)
+      if (isSummaryFile(f.path)) reasons.push('structure file')
+      lines.push(`- \`${f.path}\` — ${reasons.join(', ') || f.kind}`)
+    }
+  }
+  lines.push('')
+
+  // Unmapped upstream paths (often new top-level dirs)
+  lines.push(`## Unmapped Upstream Paths (${unmapped.length} files)`)
+  lines.push('')
+  if (unmapped.length === 0) {
+    lines.push('_All changed upstream files matched a mapping rule._')
+  } else {
+    lines.push('These upstream paths have **no entry** in `.upstream-mapping.json` and were **not** synced.')
+    lines.push('')
+    for (const u of unmapped) {
+      const sign = u.kind === 'added' ? '+' : u.kind === 'deleted' ? '-' : u.kind === 'renamed' ? '>' : '~'
+      lines.push(`- \`${u.path}\` (${sign} ${u.kind})`)
+    }
+    if (suggestedMappings.length > 0) {
+      lines.push('')
+      lines.push('### Suggested mapping entries')
+      lines.push('')
+      lines.push('Add the following to `.upstream-mapping.json` `mappings`, then re-run sync:')
+      lines.push('')
+      lines.push('```json')
+      lines.push(JSON.stringify(suggestedMappings, null, 2))
+      lines.push('```')
     }
   }
   lines.push('')
@@ -674,7 +774,10 @@ export function formatSyncReport(
   }
   if (integrity.newFiles.length > 0) {
     lines.push('')
-    lines.push(`**New files from upstream:** ${integrity.newFiles.length}`)
+    lines.push(`**New files written locally:** ${integrity.newFiles.length}`)
+    for (const f of integrity.newFiles) {
+      lines.push(`- \`${f}\``)
+    }
   }
   if (integrity.removedFiles.length > 0) {
     lines.push('')
