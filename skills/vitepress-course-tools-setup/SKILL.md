@@ -1,8 +1,8 @@
 ---
 name: vitepress-course-tools-setup
 description: |
-  配置与同步 VitePress 课程文档站的 @smart-cs/vitepress-course-tools：侧栏菜单、PDF 封面目录 tocManifest、商品详情 productDetail、npm 导出脚本。
-  当用户提到 vitepress-course-tools.config.ts、同步 docs/zh 菜单、tocManifest、productDetail、商品详情 PDF、pdf:export:product、课程 PDF 导出、README 截图配置时使用本 skill，即使用户只说「更新文档站配置」或「对齐侧栏和 PDF 配置」也应触发。
+  配置与同步 VitePress 课程文档站的 @smart-cs/vitepress-course-tools：侧栏菜单、PDF 封面目录 tocManifest、商品详情 productDetail、npm 导出脚本、源码包发布。
+  当用户提到 vitepress-course-tools.config.ts、同步 docs/zh 菜单、tocManifest、productDetail、商品详情 PDF、pdf:export:product、课程 PDF 导出、README 截图配置、code:release、code:pack、源码包发布/Gitee Release 时使用本 skill，即使用户只说「更新文档站配置」或「对齐侧栏和 PDF 配置」也应触发。
 ---
 
 # VitePress 课程工具配置
@@ -15,10 +15,10 @@ description: |
 |------|------|
 | `docs/zh/**/*.md` | 文档真源（以磁盘为准） |
 | `docs/.vitepress/config.mts` | 网站侧栏 / 导航 `link` |
-| `vitepress-course-tools.config.ts` | PDF、封面、商品详情、截图 |
+| `vitepress-course-tools.config.ts` | PDF、封面、商品详情、截图、codePack / codeRelease |
 | `scripts/export-site-utils.ts` | 旧版导出脚本中的 `ZH_*_DOCS` 列表（若存在） |
 | `shared/course-theme-class.ts` | 主题 class，勿在 VitePress 客户端 import 完整 config |
-| `package.json` | `pdf:*` / `screenshots:*` / `code:pack` 脚本 |
+| `package.json` | `pdf:*` / `screenshots:*` / `code:pack` / `code:release` 脚本 |
 
 `basePath`（config）须与 `docs/.vitepress/config.mts` 的 `base` 完全一致。
 
@@ -132,13 +132,41 @@ find docs/zh -name '*.md' | sort
 "pdf:export:product": "tsx node_modules/@smart-cs/vitepress-course-tools/src/cli/pdf-product-detail.ts",
 "pdf:build": "npm run docs:build && npm run pdf:export",
 "screenshots:readme": "tsx scripts/capture-readme-screenshots.ts",
-"code:pack": "tsx node_modules/@smart-cs/vitepress-course-tools/src/cli/pack-code.ts"
+"code:pack": "tsx node_modules/@smart-cs/vitepress-course-tools/src/cli/pack-code.ts",
+"code:release": "tsx node_modules/@smart-cs/vitepress-course-tools/scripts/release-code.ts"
 ```
+
+注意 `code:release` 的脚本在包根 `scripts/`，**不在** `src/cli/`。该命令由包提交 `dd02509`（2026-10-14）引入；旧安装（0.1.28 及更早）没有 `scripts/release-code.ts`，须先重装/更新 Git 依赖。
 
 `vitepress-course-tools.config.ts` 顶部类型导入：
 
 - 有 dist：`import type { CourseToolsConfig } from '@smart-cs/vitepress-course-tools'`
 - 仅 Git 源码：改引 `./node_modules/@smart-cs/vitepress-course-tools/src/types.ts`
+
+#### code:release：发布源码包到 Gitee Release
+
+`code:pack` 产物为 `artifacts/code.<时间戳>.zip`（如 `code.20261014-153045.zip`），密码默认每次随机生成（16 位 hex），旁路生成 `code.<时间戳>解压密码<密码>.txt`。`code:pack` 返回 `{ archivePath, password, passwordHintPath }`。
+
+`code:release` 自动先打包再发布，**只上传 zip** 到发布仓库（默认 `gitee.com/its-orange-juice-2026/published`，用 `codeRelease.repo` 调整）的 Release；**密码 txt 不上传**，发布成功后脚本把 zip 下载链接写入 txt（压缩包 / 下载链接 / 解压密码 三行），作为本地交付文件发给买家。
+
+- 认证：环境变量 `GITEE_ACCESS_TOKEN`（或 `GITEE_TOKEN`），令牌须对发布仓库有 Releases 写权限（申请勾选 projects 权限）
+- 常用参数：`--dry-run`（预览不调 API）、`--skip-pack`（发布 artifacts 下最新 zip）、`--tag/--name/--notes`（临时覆盖配置）
+- tag / name / notes 三级取值：**CLI 参数 > `codeRelease` 配置 > 自动推断**；项目名/版本推断顺序：`codeRelease.projectName/projectVersion` > `pdf.name/pdf.version` > `package.json` 的 `name/version`
+- 占位符（配置与 `--notes` 均可用）：`{project}` `{version}` `{zip}` `{zipStem}` `{timestamp}` `{date}` `{commit}` `{branch}` `{subject}` `{author}`
+
+`codeRelease` 配置段（可选，全字段有默认值）：
+
+```ts
+codeRelease: {
+  repo: 'its-orange-juice-2026/published',        // owner/repo 或 Gitee 地址
+  tag: '{project}-{version}-build.{timestamp}',   // 默认 {project}-{version}-{timestamp}
+  name: '{project} {version} 源码包',
+  notes: '### {project} {version}\n- 打包: {date}\n- 源提交: {commit}',
+  appendAttachmentNote: true,   // 配置 notes 后是否仍附加自动附件说明段
+  projectName: 'xx-guide',      // {project} 来源
+  projectVersion: 'v1.0.0'      // {version} 来源
+}
+```
 
 ### 7. 校验
 
@@ -156,11 +184,15 @@ npm run pdf:export:product -- --variant classic
 
 # README 截图 → productDetail.gallery
 npm run docs:build && npm run screenshots:readme
+
+# 源码包发布（先 dry-run 预览，确认 tag/标题/描述来源后再正式发布）
+npm run code:release -- --dry-run
 ```
 
 成品路径：
 - 课程 PDF：`artifacts/pdfs/<pdf.name>-guide-zh.pdf`
 - 商品详情：`artifacts/pdfs/<pdf.name>-product-*.pdf`
+- 源码包：`artifacts/code.<时间戳>.zip` + 旁路 `code.<时间戳>解压密码<密码>.txt`（发布成功后含下载链接，作为交付文件）
 
 ## 新增 / 删除文档时的检查单
 

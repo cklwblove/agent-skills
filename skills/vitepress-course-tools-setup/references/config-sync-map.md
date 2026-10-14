@@ -12,6 +12,7 @@ docs/zh/**/*.md  （真源）
        │     productDetail.tocSections → 分组 + note（面向买家）
        │     productDetail.gallery     → 截图路径
        │     screenshots[]             → { language, routePath, outputName }
+       │     codePack / codeRelease    → 仅工具配置（源码打包/发布），无其他同步对象
        │
        └─► scripts/export-site-utils.ts（旧脚本，若存在）
              ZH_GUIDE_DOCS[]           → 相对 docs/zh/ 的路径，含 .md
