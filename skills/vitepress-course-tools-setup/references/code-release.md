@@ -42,7 +42,7 @@ codeRelease: {
 
 | 报错 / 现象 | 原因与处理 |
 |------|------|
-| `400 {"messages":["target_commitish is missing"]}` | 0.1.29 包内 commit `1ffd6f6`（2026-10-14）之前的 bug：每次时间戳 tag 均为新 tag，Gitee 必填 `target_commitish`，而脚本未传。更新依赖到 `1ffd6f6+`（命令见下节） |
+| `400 target_commitish is missing` 或 `400 创建标签失败` | 0.1.29 包 commit `4944b67`（2026-10-14）前的两段 bug：①脚本未传 `target_commitish`（tag 不存在时 Gitee 必填）；②补传**本地源码仓库的 sha** 后，因发布仓库（published）与源码仓库不同、该 sha 在发布仓库不存在，建 tag 仍失败。最终方案：脚本先 GET 发布仓库取 `default_branch`（兜底 `master`）作 `target_commitish`。更新依赖到 `4944b67+`（命令见下节） |
 | `403 Forbidden` | 发布目标是**私有仓库**——最常见是把 `codeRelease.repo` 误配成项目自己的私有源码仓库。发布仓库必须是公开交付仓库（默认 `its-orange-juice-2026/published`，通常无需配置 repo）；若已是公开仓库则检查令牌账号对其是否有写权限 |
 | 发布了旧包 / `--skip-pack` 选错 zip | artifacts 里残留无时间戳的旧格式 `code.zip`：字典序上 `code.zip` > `code.2026…`，被当作「最新」选中。删除旧格式 zip 及其配套密码 txt |
 | 「工作区存在未提交改动」警告 | zip 会包含未提交改动，但发布说明只对应 HEAD 提交。先提交再发布，或明确接受差异 |
