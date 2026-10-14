@@ -168,6 +168,10 @@ codeRelease: {
 }
 ```
 
+**固化通用发版描述**：交付型项目不要用默认的「commit 信息」描述，用 `codeRelease.notes` 模板固化统一文案（结构与 `productDetail.intro` 口径一致，仅保留 `{version}/{date}/{commit}/{branch}/{zip}` 动态项），并配 `appendAttachmentNote: false` 避免责声明重复。完整模板与要点见 [references/code-release.md](references/code-release.md)。
+
+**发布排障**（400 `target_commitish` / 403 私有仓库 / 旧 zip 干扰）与 **Git 依赖更新命令**（ssh→https 重写 + `--legacy-peer-deps`）同样见 [references/code-release.md](references/code-release.md)。
+
 ### 7. 校验
 
 ```bash
@@ -214,3 +218,4 @@ npm run code:release -- --dry-run
 - 包内 README：`node_modules/@smart-cs/vitepress-course-tools/README.md`
 - 字段速查：[references/product-detail-fields.md](references/product-detail-fields.md)
 - 同步关系图：[references/config-sync-map.md](references/config-sync-map.md)
+- 源码包发布（固化描述模板 / 排障 / 依赖更新）：[references/code-release.md](references/code-release.md)
