@@ -1,8 +1,8 @@
 ---
 name: vitepress-course-tools-setup
 description: |
-  配置与同步 VitePress 课程文档站的 @smart-cs/vitepress-course-tools：侧栏菜单、PDF 封面目录 tocManifest、商品详情 productDetail、npm 导出脚本、源码包发布。
-  当用户提到 vitepress-course-tools.config.ts、同步 docs/zh 菜单、tocManifest、productDetail、商品详情 PDF、pdf:export:product、课程 PDF 导出、README 截图配置、code:release、code:pack、源码包发布/Gitee Release 时使用本 skill，即使用户只说「更新文档站配置」或「对齐侧栏和 PDF 配置」也应触发。
+  配置与同步 VitePress 课程文档站的 @smart-cs/vitepress-course-tools：空工程脚手架、侧栏菜单、PDF 封面目录 tocManifest、商品详情 productDetail、npm 导出脚本、源码包发布。
+  当用户提到 vitepress-course-tools.config.ts、同步 docs/zh 菜单、tocManifest、productDetail、商品详情 PDF、pdf:export:product、课程 PDF 导出、README 截图配置、code:release、code:pack、源码包发布/Gitee Release，或要在空目录初始化/新建课程文档站时使用本 skill，即使用户只说「更新文档站配置」「对齐侧栏和 PDF 配置」或「新建文档工程」也应触发。
 ---
 
 # VitePress 课程工具配置
@@ -26,6 +26,7 @@ description: |
 
 ```
 进度：
+- [ ] 0. 空工程判断：无 VitePress 工程则先从模板脚手架
 - [ ] 1. 扫描 docs/zh 实际 .md 文件
 - [ ] 2. 同步 docs/.vitepress/config.mts 侧栏
 - [ ] 3. 同步 vitepress-course-tools.config.ts → cover.tocManifest
@@ -34,6 +35,38 @@ description: |
 - [ ] 6. 确认 package.json 导出脚本与依赖
 - [ ] 7. 校验（可选运行导出）
 ```
+
+### 0. 空工程：先脚手架再配置
+
+**判断**：项目根没有 `docs/.vitepress/config.mts` 且没有 `vitepress-course-tools.config.ts`（全新目录，或只有 `.git`/零散文件）→ 视为空工程，**先基于模板仓库创建项目工程**，再进入 1–7 的同步流程。
+
+模板仓库：https://github.com/cklwblove/claude-code-theme-vitepress （默认分支 `main`）
+
+```bash
+# 目录完全为空：
+git clone --depth 1 https://github.com/cklwblove/claude-code-theme-vitepress.git .
+
+# 目录已有文件（如已有 .git，clone 到 '.' 会失败）：克隆到临时目录再拷入
+git clone --depth 1 https://github.com/cklwblove/claude-code-theme-vitepress.git .scaffold
+rm -rf .scaffold/.git            # 断开模板历史，作为独立新项目
+cp -Rn .scaffold/. . && rm -rf .scaffold   # -n 不覆盖已有文件；发现同名冲突先报告再处理
+[ -d .git ] || git init
+
+npm install --legacy-peer-deps   # 依赖走 https Git URL，无需 ssh 重写；peer 冲突按现状安装
+npm run docs:dev                 # 验证站点可启动
+```
+
+模板已提供：`docs/zh/index.md`、`docs/en/index.md`、`docs/.vitepress/`（config + theme）、`scripts/export-site-utils.ts`、`scripts/capture-readme-screenshots.ts`、`shared/course-theme-class.ts`、`vitepress-course-tools.config.ts`（Git 依赖式 import），以及含 `pdf:*` / `math:*` / `code:pack` 脚本的 `package.json`；**缺** `code:release`、`pdf:export:product`、`screenshots:readme`，在第 6 步补齐。
+
+**脚手架后必改的模板残留**（模板带着上一门课的配置）：
+
+- `package.json`：`name` / `description` / `version`
+- `vitepress-course-tools.config.ts`：`basePath`（模板残留 `/AgroAgentOS_docs/`）、`pdf.name` / `footerMark`、`codePack.exclude` 里的旧项目文件
+- `docs/.vitepress/config.mts`：`base`（须与 `basePath` 完全一致）、站点标题
+- `CLAUDE.md`：按新项目重写；`.cursor/` 可删
+- 起步内容 `docs/zh/index.md`
+
+改完身份配置后写入真实文档，再按 1–7 同步侧栏 / PDF / 商品详情。
 
 ### 1. 扫描 docs/zh
 
@@ -215,6 +248,7 @@ npm run code:release -- --dry-run
 
 ## 参考
 
+- 脚手架模板仓库（空工程初始化用）：https://github.com/cklwblove/claude-code-theme-vitepress
 - 包内 README：`node_modules/@smart-cs/vitepress-course-tools/README.md`
 - 字段速查：[references/product-detail-fields.md](references/product-detail-fields.md)
 - 同步关系图：[references/config-sync-map.md](references/config-sync-map.md)
